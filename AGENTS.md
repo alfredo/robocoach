@@ -105,6 +105,26 @@ MediaPipe fetches two things over HTTP at load time, outside the bundler:
   for sport motion. If a change makes tracking feel laggy, check it before
   blaming the model.
 
+## Metrics
+
+`src/metrics/` scores dryland arm swing drills. Four things to know before
+changing it:
+
+- **Geometry uses x and y only.** MediaPipe's z is weakly supervised and much
+  noisier than x/y, and every metric is an angle that noise would dominate.
+  The declared camera view says which anatomical plane the projection is.
+- **Metrics declare valid views and the readout honours that.** Side-on, the far
+  arm is occluded, so a left/right symmetry figure computes fine and means
+  nothing. Add `views:` to any new metric.
+- **Signed angles wrap.** A swing goes overhead, straight through +/-180. Run
+  `unwrap()` before any peak-to-peak measurement or it will read ~358 instead of
+  ~2. Symmetry compares elevation *magnitude* for the same reason.
+- **The noise floor is 1-3 degrees.** Repeating one identical frame still moves
+  the metrics that much. Do not read meaning into smaller changes.
+
+Rep detection is deliberately absent: its thresholds are empirical and need real
+footage. See `fixtures/README.md` for the capture protocol.
+
 ## Verifying changes
 
 There is no camera in CI or in a sandbox, but the whole pipeline can still be

@@ -3,15 +3,16 @@ import { FilesetResolver, PoseLandmarker } from "@mediapipe/tasks-vision";
 import { Camera } from "./camera";
 import { LandmarkSmoother } from "./one_euro_filter";
 import { RendererCanvas2d } from "./renderer_canvas2d";
-import { MODEL_ASSETS, STATE, WASM_PATH } from "./params";
+import { MODEL_ASSETS, POSE_LANDMARK_NAMES, STATE, WASM_PATH } from "./params";
 import { FrameBuffer } from "./metrics/frame_buffer";
 import { buildSample } from "./metrics/sample";
 import { evaluate, VIEWS } from "./metrics/definitions";
 import { Readout } from "./metrics/readout";
+import { SessionRecorder, downloadSession } from "./metrics/recorder";
 
 let camera, landmarker, renderer, rafId;
 let normalizedSmoother, worldSmoother;
-let frames, readout;
+let frames, readout, recorder;
 // detectForVideo requires strictly increasing timestamps, and re-running
 // inference on a frame the camera has not replaced yet is wasted work.
 let lastVideoTime = -1;
@@ -65,10 +66,13 @@ function renderResult() {
   if (camera.video.currentTime !== lastVideoTime) {
     lastVideoTime = camera.video.currentTime;
     const timestamp = performance.now();
-    lastResult = smooth(
-      landmarker.detectForVideo(camera.video, timestamp),
-      timestamp
-    );
+    const detected = landmarker.detectForVideo(camera.video, timestamp);
+    // Recorded before smoothing: filtering can be reapplied offline with any
+    // parameters, but it cannot be removed after the fact.
+    if (detected.worldLandmarks.length > 0) {
+      recorder.capture(detected.worldLandmarks[0], timestamp);
+    }
+    lastResult = smooth(detected, timestamp);
     recordSample(lastResult, timestamp);
   }
 
@@ -97,16 +101,54 @@ function drawMetrics() {
     return;
   }
   const samples = frames.window(STATE.metrics.windowMs);
-  const note =
-    samples.length === 0
-      ? "no pose — stand in frame"
-      : `${(STATE.metrics.windowMs / 1000).toFixed(0)}s window · ${samples.length} frames`;
+  let note;
+  if (recorder.recording) {
+    const mb = (recorder.estimateBytes() / 1048576).toFixed(1);
+    note = `● REC ${recorder.durationSeconds.toFixed(0)}s · ${recorder.frames.length} frames · ${recorder.marks.length} marks · ~${mb}MB`;
+  } else if (samples.length === 0) {
+    note = "no pose — stand in frame";
+  } else {
+    note = `${(STATE.metrics.windowMs / 1000).toFixed(0)}s window · ${samples.length} frames · R to record`;
+  }
   readout.draw(STATE.metrics.view, evaluate(STATE.metrics.view, samples), note);
 }
 
 function renderPrediction() {
   renderResult();
   rafId = requestAnimationFrame(renderPrediction);
+}
+
+/**
+ * R toggles recording, Space marks a rep. Space is meant for a second person
+ * watching: those marks are the ground truth a rep detector is scored against.
+ */
+function bindRecordingKeys() {
+  window.addEventListener("keydown", (event) => {
+    if (event.repeat) {
+      return;
+    }
+    const key = event.key.toLowerCase();
+    if (key === "r") {
+      if (recorder.recording) {
+        recorder.stop();
+        const bytes = downloadSession(recorder, POSE_LANDMARK_NAMES);
+        console.log(
+          `session saved: ${recorder.frames.length} frames, ` +
+            `${recorder.marks.length} marks, ${(bytes / 1048576).toFixed(2)}MB`
+        );
+      } else {
+        recorder.start({
+          view: STATE.metrics.view,
+          model: STATE.model,
+          smoothing: STATE.smoothing,
+          camera: { width: camera.video.width, height: camera.video.height },
+        });
+      }
+    } else if (event.code === "Space") {
+      event.preventDefault();
+      recorder.mark();
+    }
+  });
 }
 
 function applyUrlParams() {
@@ -147,6 +189,8 @@ async function app() {
   renderer = new RendererCanvas2d(canvas);
   readout = new Readout(canvas);
   frames = new FrameBuffer(STATE.metrics.bufferFrames);
+  recorder = new SessionRecorder();
+  bindRecordingKeys();
 
   renderPrediction();
 }
