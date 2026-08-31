@@ -3,3 +3,4 @@ tfjs-models/
 dist/
 .parcel-cache/
 old/
+.assets/
