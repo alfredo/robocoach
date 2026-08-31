@@ -4,9 +4,14 @@ import { Camera } from "./camera";
 import { LandmarkSmoother } from "./one_euro_filter";
 import { RendererCanvas2d } from "./renderer_canvas2d";
 import { MODEL_ASSETS, STATE, WASM_PATH } from "./params";
+import { FrameBuffer } from "./metrics/frame_buffer";
+import { buildSample } from "./metrics/sample";
+import { evaluate, VIEWS } from "./metrics/definitions";
+import { Readout } from "./metrics/readout";
 
 let camera, landmarker, renderer, rafId;
 let normalizedSmoother, worldSmoother;
+let frames, readout;
 // detectForVideo requires strictly increasing timestamps, and re-running
 // inference on a frame the camera has not replaced yet is wasted work.
 let lastVideoTime = -1;
@@ -64,9 +69,39 @@ function renderResult() {
       landmarker.detectForVideo(camera.video, timestamp),
       timestamp
     );
+    recordSample(lastResult, timestamp);
   }
 
   renderer.draw(camera.video, lastResult);
+  drawMetrics();
+}
+
+/**
+ * Metrics run off the smoothed world landmarks, so they inherit the same
+ * filtering the overlay shows. Losing the pose clears the history rather than
+ * letting a stale window blend across a gap.
+ */
+function recordSample(result, timestamp) {
+  if (!STATE.metrics.enabled) {
+    return;
+  }
+  if (result.worldLandmarks.length === 0) {
+    frames.clear();
+    return;
+  }
+  frames.push(buildSample(result.worldLandmarks[0], timestamp));
+}
+
+function drawMetrics() {
+  if (!STATE.metrics.enabled) {
+    return;
+  }
+  const samples = frames.window(STATE.metrics.windowMs);
+  const note =
+    samples.length === 0
+      ? "no pose — stand in frame"
+      : `${(STATE.metrics.windowMs / 1000).toFixed(0)}s window · ${samples.length} frames`;
+  readout.draw(STATE.metrics.view, evaluate(STATE.metrics.view, samples), note);
 }
 
 function renderPrediction() {
@@ -87,6 +122,14 @@ function applyUrlParams() {
   if (urlParams.has("smoothing")) {
     STATE.smoothing.enabled = urlParams.get("smoothing") !== "0";
   }
+
+  const view = urlParams.get("view");
+  if (view != null && VIEWS.includes(view)) {
+    STATE.metrics.view = view;
+  }
+  if (urlParams.has("metrics")) {
+    STATE.metrics.enabled = urlParams.get("metrics") !== "0";
+  }
 }
 
 async function app() {
@@ -102,6 +145,8 @@ async function app() {
   canvas.width = camera.video.width;
   canvas.height = camera.video.height;
   renderer = new RendererCanvas2d(canvas);
+  readout = new Readout(canvas);
+  frames = new FrameBuffer(STATE.metrics.bufferFrames);
 
   renderPrediction();
 }
