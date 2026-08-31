@@ -68,7 +68,7 @@ export class Camera {
 
     await new Promise((resolve) => {
       camera.video.onloadedmetadata = () => {
-        resolve(video);
+        resolve(camera.video);
       };
     });
 

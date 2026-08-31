@@ -13,8 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  * =============================================================================
+ *
+ * Adapted from the tfjs-models pose-detection demo renderer to draw MediaPipe
+ * PoseLandmarker output (33 landmarks, normalized 2D + metric 3D) instead of
+ * MoveNet's 17 pixel-space keypoints.
  */
-import * as posedetection from "@tensorflow-models/pose-detection";
+import { PoseLandmarker } from "@mediapipe/tasks-vision";
 import * as scatter from "scatter-gl";
 
 import * as params from "./params";
@@ -28,48 +32,10 @@ const ANCHOR_POINTS = [
   [-1, -1, 0],
 ];
 
-// #ffffff - White
-// #800000 - Maroon
-// #469990 - Malachite
-// #e6194b - Crimson
-// #42d4f4 - Picton Blue
-// #fabed4 - Cupid
-// #aaffc3 - Mint Green
-// #9a6324 - Kumera
-// #000075 - Navy Blue
-// #f58231 - Jaffa
-// #4363d8 - Royal Blue
-// #ffd8b1 - Caramel
-// #dcbeff - Mauve
-// #808000 - Olive
-// #ffe119 - Candlelight
-// #911eb4 - Seance
-// #bfef45 - Inchworm
-// #f032e6 - Razzle Dazzle Rose
-// #3cb44b - Chateau Green
-// #a9a9a9 - Silver Chalice
-const COLOR_PALETTE = [
-  "#ffffff",
-  "#800000",
-  "#469990",
-  "#e6194b",
-  "#42d4f4",
-  "#fabed4",
-  "#aaffc3",
-  "#9a6324",
-  "#000075",
-  "#f58231",
-  "#4363d8",
-  "#ffd8b1",
-  "#dcbeff",
-  "#808000",
-  "#ffe119",
-  "#911eb4",
-  "#bfef45",
-  "#f032e6",
-  "#3cb44b",
-  "#a9a9a9",
-];
+const LEFT_COLOR = "#00ff00";
+const RIGHT_COLOR = "#ffa500";
+const MIDDLE_COLOR = "#ff0000";
+
 export class RendererCanvas2d {
   constructor(canvas) {
     this.ctx = canvas.getContext("2d");
@@ -82,6 +48,18 @@ export class RendererCanvas2d {
     this.scatterGLHasInitialized = false;
     this.videoWidth = canvas.width;
     this.videoHeight = canvas.height;
+
+    // Precompute the side lookup so the per-frame path is a plain array read.
+    this.sideByIndex = new Array(params.POSE_LANDMARK_NAMES.length).fill(
+      MIDDLE_COLOR
+    );
+    for (const i of params.KEYPOINT_INDEX_BY_SIDE.left) {
+      this.sideByIndex[i] = LEFT_COLOR;
+    }
+    for (const i of params.KEYPOINT_INDEX_BY_SIDE.right) {
+      this.sideByIndex[i] = RIGHT_COLOR;
+    }
+
     this.flip(this.videoWidth, this.videoHeight);
   }
 
@@ -93,20 +71,27 @@ export class RendererCanvas2d {
     this.scatterGLEl.style = `width: ${videoWidth}px; height: ${videoHeight}px;`;
     this.scatterGL.resize();
 
-    this.scatterGLEl.style.display = params.STATE.modelConfig.render3D
+    this.scatterGLEl.style.display = params.STATE.render3D
       ? "inline-block"
       : "none";
   }
 
-  draw(rendererParams) {
-    const [video, poses, isModelChanged] = rendererParams;
+  /**
+   * @param video The source video element.
+   * @param result A PoseLandmarkerResult, already smoothed.
+   */
+  draw(video, result) {
     this.drawCtx(video);
 
-    // The null check makes sure the UI is not in the middle of changing to a
-    // different model. If during model change, the result is from an old model,
-    // which shouldn't be rendered.
-    if (poses && poses.length > 0 && !isModelChanged) {
-      this.drawResults(poses);
+    if (result == null) {
+      return;
+    }
+    for (const landmarks of result.landmarks) {
+      this.drawKeypoints(landmarks);
+      this.drawSkeleton(landmarks);
+    }
+    if (params.STATE.render3D && result.worldLandmarks.length > 0) {
+      this.drawKeypoints3D(result.worldLandmarks[0]);
     }
   }
 
@@ -118,110 +103,82 @@ export class RendererCanvas2d {
     this.ctx.clearRect(0, 0, this.videoWidth, this.videoHeight);
   }
 
-  /**
-   * Draw the keypoints and skeleton on the video.
-   * @param poses A list of poses to render.
-   */
-  drawResults(poses) {
-    for (const pose of poses) {
-      this.drawResult(pose);
-    }
+  /** Landmarks arrive normalized to 0..1; scale them into canvas pixels. */
+  toPixels(landmark) {
+    return {
+      x: landmark.x * this.videoWidth,
+      y: landmark.y * this.videoHeight,
+    };
+  }
+
+  isVisible(landmark) {
+    // Treat a missing visibility as visible, matching the model's own
+    // behaviour for variants that do not emit the field.
+    const visibility = landmark.visibility != null ? landmark.visibility : 1;
+    return visibility >= params.STATE.visibilityThreshold;
   }
 
   /**
-   * Draw the keypoints and skeleton on the video.
-   * @param pose A pose with keypoints to render.
+   * Draw the keypoints on the video, coloured by body side so that left and
+   * right stay distinguishable in side-on views.
    */
-  drawResult(pose) {
-    if (pose.keypoints != null) {
-      this.drawKeypoints(pose.keypoints);
-      this.drawSkeleton(pose.keypoints, pose.id);
-    }
-    if (pose.keypoints3D != null && params.STATE.modelConfig.render3D) {
-      this.drawKeypoints3D(pose.keypoints3D);
-    }
-  }
-
-  /**
-   * Draw the keypoints on the video.
-   * @param keypoints A list of keypoints.
-   */
-  drawKeypoints(keypoints) {
-    const keypointInd = posedetection.util.getKeypointIndexBySide(
-      params.STATE.model
-    );
-    this.ctx.fillStyle = "Red";
+  drawKeypoints(landmarks) {
     this.ctx.strokeStyle = "White";
     this.ctx.lineWidth = params.DEFAULT_LINE_WIDTH;
 
-    for (const i of keypointInd.middle) {
-      this.drawKeypoint(keypoints[i]);
-    }
-
-    this.ctx.fillStyle = "Green";
-    for (const i of keypointInd.left) {
-      this.drawKeypoint(keypoints[i]);
-    }
-
-    this.ctx.fillStyle = "Orange";
-    for (const i of keypointInd.right) {
-      this.drawKeypoint(keypoints[i]);
-    }
-  }
-
-  drawKeypoint(keypoint) {
-    // If score is null, just show the keypoint.
-    const score = keypoint.score != null ? keypoint.score : 1;
-    const scoreThreshold = params.STATE.modelConfig.scoreThreshold || 0;
-
-    if (score >= scoreThreshold) {
+    landmarks.forEach((landmark, i) => {
+      if (!this.isVisible(landmark)) {
+        return;
+      }
+      this.ctx.fillStyle = this.sideByIndex[i];
+      const { x, y } = this.toPixels(landmark);
       const circle = new Path2D();
-      circle.arc(keypoint.x, keypoint.y, params.DEFAULT_RADIUS, 0, 2 * Math.PI);
+      circle.arc(x, y, params.DEFAULT_RADIUS, 0, 2 * Math.PI);
       this.ctx.fill(circle);
       this.ctx.stroke(circle);
+    });
+  }
+
+  /**
+   * Draw the skeleton of a body on the video. Each bone takes the colour of its
+   * side, so an occluded limb crossing the body is still readable.
+   */
+  drawSkeleton(landmarks) {
+    this.ctx.lineWidth = params.DEFAULT_LINE_WIDTH;
+
+    for (const { start, end } of PoseLandmarker.POSE_CONNECTIONS) {
+      const from = landmarks[start];
+      const to = landmarks[end];
+      if (from == null || to == null) {
+        continue;
+      }
+      if (!this.isVisible(from) || !this.isVisible(to)) {
+        continue;
+      }
+      // A bone spanning the midline gets the colour of its far end.
+      this.ctx.strokeStyle =
+        this.sideByIndex[start] === MIDDLE_COLOR
+          ? this.sideByIndex[end]
+          : this.sideByIndex[start];
+
+      const a = this.toPixels(from);
+      const b = this.toPixels(to);
+      this.ctx.beginPath();
+      this.ctx.moveTo(a.x, a.y);
+      this.ctx.lineTo(b.x, b.y);
+      this.ctx.stroke();
     }
   }
 
   /**
-   * Draw the skeleton of a body on the video.
-   * @param keypoints A list of keypoints.
+   * Render the metric world landmarks as a rotatable point cloud. This is the
+   * view that disambiguates depth, so it is the useful one for side-on work.
    */
-  drawSkeleton(keypoints, poseId) {
-    // Each poseId is mapped to a color in the color palette.
-    const color =
-      params.STATE.modelConfig.enableTracking && poseId != null
-        ? COLOR_PALETTE[poseId % 20]
-        : "White";
-    this.ctx.fillStyle = color;
-    this.ctx.strokeStyle = color;
-    this.ctx.lineWidth = params.DEFAULT_LINE_WIDTH;
-
-    posedetection.util
-      .getAdjacentPairs(params.STATE.model)
-      .forEach(([i, j]) => {
-        const kp1 = keypoints[i];
-        const kp2 = keypoints[j];
-
-        // If score is null, just show the keypoint.
-        const score1 = kp1.score != null ? kp1.score : 1;
-        const score2 = kp2.score != null ? kp2.score : 1;
-        const scoreThreshold = params.STATE.modelConfig.scoreThreshold || 0;
-
-        if (score1 >= scoreThreshold && score2 >= scoreThreshold) {
-          this.ctx.beginPath();
-          this.ctx.moveTo(kp1.x, kp1.y);
-          this.ctx.lineTo(kp2.x, kp2.y);
-          this.ctx.stroke();
-        }
-      });
-  }
-
-  drawKeypoints3D(keypoints) {
-    const scoreThreshold = params.STATE.modelConfig.scoreThreshold || 0;
-    const pointsData = keypoints.map((keypoint) => [
-      -keypoint.x,
-      -keypoint.y,
-      -keypoint.z,
+  drawKeypoints3D(landmarks) {
+    const pointsData = landmarks.map((landmark) => [
+      -landmark.x,
+      -landmark.y,
+      -landmark.z,
     ]);
 
     const dataset = new scatter.ScatterGL.Dataset([
@@ -229,23 +186,12 @@ export class RendererCanvas2d {
       ...ANCHOR_POINTS,
     ]);
 
-    const keypointInd = posedetection.util.getKeypointIndexBySide(
-      params.STATE.model
-    );
     this.scatterGL.setPointColorer((i) => {
-      if (keypoints[i] == null || keypoints[i].score < scoreThreshold) {
-        // hide anchor points and low-confident points.
+      // Hide the anchor points and any landmark the model is unsure of.
+      if (landmarks[i] == null || !this.isVisible(landmarks[i])) {
         return "#ffffff";
       }
-      if (i === 0) {
-        return "#ff0000" /* Red */;
-      }
-      if (keypointInd.left.indexOf(i) > -1) {
-        return "#00ff00" /* Green */;
-      }
-      if (keypointInd.right.indexOf(i) > -1) {
-        return "#ffa500" /* Orange */;
-      }
+      return this.sideByIndex[i];
     });
 
     if (!this.scatterGLHasInitialized) {
@@ -253,8 +199,9 @@ export class RendererCanvas2d {
     } else {
       this.scatterGL.updateDataset(dataset);
     }
-    const connections = posedetection.util.getAdjacentPairs(params.STATE.model);
-    const sequences = connections.map((pair) => ({ indices: pair }));
+    const sequences = PoseLandmarker.POSE_CONNECTIONS.map(({ start, end }) => ({
+      indices: [start, end],
+    }));
     this.scatterGL.setSequences(sequences);
     this.scatterGLHasInitialized = true;
   }
