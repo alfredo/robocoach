@@ -129,12 +129,13 @@ export function downloadSession(recorder, landmarkNames) {
   const stamp = (recorder.startedAt || new Date().toISOString())
     .replace(/[:.]/g, "-")
     .slice(0, 19);
+  const name = `robocoach-${recorder.meta?.view || "session"}-${stamp}.json`;
   const link = document.createElement("a");
   link.href = url;
-  link.download = `robocoach-${recorder.meta?.view || "session"}-${stamp}.json`;
+  link.download = name;
   document.body.appendChild(link);
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-  return payload.length;
+  return { name, bytes: payload.length };
 }

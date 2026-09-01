@@ -58,6 +58,8 @@ export const STATE = {
   metrics: {
     enabled: true,
     view: "side",
+    /** Armed by ?record=1: starts recording at the first detected pose. */
+    autoRecord: false,
     /** Rolling span the metrics are computed over, in milliseconds. */
     windowMs: 3000,
     /** Frames retained. At 60fps this is ten seconds, comfortably over windowMs. */

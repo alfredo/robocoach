@@ -9,10 +9,11 @@ import { buildSample } from "./metrics/sample";
 import { evaluate, VIEWS } from "./metrics/definitions";
 import { Readout } from "./metrics/readout";
 import { SessionRecorder, downloadSession } from "./metrics/recorder";
+import { RecorderControls } from "./metrics/controls";
 
 let camera, landmarker, renderer, rafId;
 let normalizedSmoother, worldSmoother;
-let frames, readout, recorder;
+let frames, readout, recorder, controls;
 // detectForVideo requires strictly increasing timestamps, and re-running
 // inference on a frame the camera has not replaced yet is wasted work.
 let lastVideoTime = -1;
@@ -70,6 +71,11 @@ function renderResult() {
     // Recorded before smoothing: filtering can be reapplied offline with any
     // parameters, but it cannot be removed after the fact.
     if (detected.worldLandmarks.length > 0) {
+      if (STATE.metrics.autoRecord && !recorder.recording && !recorder.startedAt) {
+        // Armed by ?record=1: begin at the first detected pose rather than on
+        // load, so a tripod setup does not bank seconds of an empty gym.
+        controls.toggle();
+      }
       recorder.capture(detected.worldLandmarks[0], timestamp);
     }
     lastResult = smooth(detected, timestamp);
@@ -111,6 +117,9 @@ function drawMetrics() {
     note = `${(STATE.metrics.windowMs / 1000).toFixed(0)}s window · ${samples.length} frames · R to record`;
   }
   readout.draw(STATE.metrics.view, evaluate(STATE.metrics.view, samples), note);
+  if (recorder.recording) {
+    controls.render();
+  }
 }
 
 function renderPrediction() {
@@ -118,37 +127,24 @@ function renderPrediction() {
   rafId = requestAnimationFrame(renderPrediction);
 }
 
-/**
- * R toggles recording, Space marks a rep. Space is meant for a second person
- * watching: those marks are the ground truth a rep detector is scored against.
- */
-function bindRecordingKeys() {
-  window.addEventListener("keydown", (event) => {
-    if (event.repeat) {
-      return;
-    }
-    const key = event.key.toLowerCase();
-    if (key === "r") {
-      if (recorder.recording) {
-        recorder.stop();
-        const bytes = downloadSession(recorder, POSE_LANDMARK_NAMES);
-        console.log(
-          `session saved: ${recorder.frames.length} frames, ` +
-            `${recorder.marks.length} marks, ${(bytes / 1048576).toFixed(2)}MB`
-        );
-      } else {
-        recorder.start({
-          view: STATE.metrics.view,
-          model: STATE.model,
-          smoothing: STATE.smoothing,
-          camera: { width: camera.video.width, height: camera.video.height },
-        });
-      }
-    } else if (event.code === "Space") {
-      event.preventDefault();
-      recorder.mark();
-    }
-  });
+function captureMeta() {
+  return {
+    view: STATE.metrics.view,
+    model: STATE.model,
+    smoothing: STATE.smoothing,
+    camera: { width: camera.video.width, height: camera.video.height },
+  };
+}
+
+function saveSession() {
+  const filename = downloadSession(recorder, POSE_LANDMARK_NAMES);
+  controls.reportSaved(
+    filename.name,
+    filename.bytes,
+    recorder.frames.length,
+    recorder.marks.length,
+    recorder.fps
+  );
 }
 
 function applyUrlParams() {
@@ -172,6 +168,9 @@ function applyUrlParams() {
   if (urlParams.has("metrics")) {
     STATE.metrics.enabled = urlParams.get("metrics") !== "0";
   }
+  if (urlParams.has("record")) {
+    STATE.metrics.autoRecord = urlParams.get("record") !== "0";
+  }
 }
 
 async function app() {
@@ -190,7 +189,10 @@ async function app() {
   readout = new Readout(canvas);
   frames = new FrameBuffer(STATE.metrics.bufferFrames);
   recorder = new SessionRecorder();
-  bindRecordingKeys();
+  controls = new RecorderControls(recorder, {
+    onStart: captureMeta,
+    onStop: saveSession,
+  });
 
   renderPrediction();
 }

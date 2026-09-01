@@ -21,11 +21,17 @@ regression test.
 2. Frame the athlete so the whole body is visible, camera roughly level and
    perpendicular. Tape the floor position if you want sessions to be comparable
    across days.
-3. Press **R** to start recording. The panel shows `● REC` with a live frame,
-   mark and size count.
-4. Have a **second person tap Space once per rep** while the athlete works.
-5. Press **R** again to stop. The browser downloads
-   `robocoach-<view>-<timestamp>.json`.
+3. Tap **Start recording**. The bar shows a live frame, mark and size count.
+   (**R** does the same from a keyboard.)
+4. Have a **second person tap "Mark rep" once per rep** while the athlete works.
+   (**Space** from a keyboard.)
+5. Tap **Stop & save**. The browser downloads
+   `robocoach-<view>-<timestamp>.json`, and the bar reports what was captured
+   so a bad take is obvious before you leave the gym.
+
+For a tripod setup where nobody can reach the screen, add `&record=1` to the
+URL: recording then begins at the first detected pose rather than on load, so
+you do not bank seconds of an empty gym.
 6. Commit it here, and note the rep count in the commit message.
 
 Recording auto-stops after 120 seconds so a forgotten session cannot grow
