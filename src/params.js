@@ -50,6 +50,21 @@ export const STATE = {
   /** Landmarks below this visibility are not drawn. */
   visibilityThreshold: 0.5,
   render3D: false,
+  /**
+   * Metrics are computed for one declared camera view at a time. Each metric
+   * names the views it is valid in (see metrics/definitions.js); the view set
+   * here decides which of them are computed and shown.
+   */
+  metrics: {
+    enabled: true,
+    view: "side",
+    /** Armed by ?record=1: starts recording at the first detected pose. */
+    autoRecord: false,
+    /** Rolling span the metrics are computed over, in milliseconds. */
+    windowMs: 3000,
+    /** Frames retained. At 60fps this is ten seconds, comfortably over windowMs. */
+    bufferFrames: 600,
+  },
   smoothing: {
     enabled: true,
     /**

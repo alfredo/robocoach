@@ -14,3 +14,62 @@ body {
 #scatter-gl-container {
   position: relative;
 }
+
+/* Recording controls.
+   Deliberately DOM rather than drawn on the canvas: the canvas context is
+   mirrored, so anything painted into it comes out backwards, and real buttons
+   get touch targets, focus rings and screen-reader semantics for free. The bar
+   is fixed to the bottom because the usual setup is a tablet on a tripod, where
+   the bottom of the screen is what a coach can actually reach. */
+#controls {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: rgba(0, 0, 0, 0.78);
+  font: 14px system-ui, sans-serif;
+  color: #f0f0f0;
+}
+.control {
+  font: 600 15px system-ui, sans-serif;
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  /* Comfortably past the ~44px minimum touch target; this gets tapped mid-drill. */
+  min-height: 52px;
+  padding: 0 22px;
+  cursor: pointer;
+}
+.control:focus-visible {
+  outline: 3px solid #7cc4ff;
+  outline-offset: 2px;
+}
+.control-record {
+  background: #b3261e;
+}
+.control-record[aria-pressed="true"] {
+  background: #7a1912;
+}
+.control-mark {
+  background: #2f6f3e;
+  flex: 1;
+  max-width: 320px;
+}
+.control:disabled {
+  background: #3a3a3a;
+  color: #8a8a8a;
+  cursor: default;
+}
+#control-status {
+  margin: 0;
+  color: #c8c8c8;
+  font-variant-numeric: tabular-nums;
+}
+/* Keep the video clear of the fixed bar. */
+#main {
+  padding-bottom: 84px;
+}

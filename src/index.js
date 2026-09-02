@@ -3,10 +3,17 @@ import { FilesetResolver, PoseLandmarker } from "@mediapipe/tasks-vision";
 import { Camera } from "./camera";
 import { LandmarkSmoother } from "./one_euro_filter";
 import { RendererCanvas2d } from "./renderer_canvas2d";
-import { MODEL_ASSETS, STATE, WASM_PATH } from "./params";
+import { MODEL_ASSETS, POSE_LANDMARK_NAMES, STATE, WASM_PATH } from "./params";
+import { FrameBuffer } from "./metrics/frame_buffer";
+import { buildSample } from "./metrics/sample";
+import { evaluate, VIEWS } from "./metrics/definitions";
+import { Readout } from "./metrics/readout";
+import { SessionRecorder, downloadSession } from "./metrics/recorder";
+import { RecorderControls } from "./metrics/controls";
 
 let camera, landmarker, renderer, rafId;
 let normalizedSmoother, worldSmoother;
+let frames, readout, recorder, controls;
 // detectForVideo requires strictly increasing timestamps, and re-running
 // inference on a frame the camera has not replaced yet is wasted work.
 let lastVideoTime = -1;
@@ -60,18 +67,84 @@ function renderResult() {
   if (camera.video.currentTime !== lastVideoTime) {
     lastVideoTime = camera.video.currentTime;
     const timestamp = performance.now();
-    lastResult = smooth(
-      landmarker.detectForVideo(camera.video, timestamp),
-      timestamp
-    );
+    const detected = landmarker.detectForVideo(camera.video, timestamp);
+    // Recorded before smoothing: filtering can be reapplied offline with any
+    // parameters, but it cannot be removed after the fact.
+    if (detected.worldLandmarks.length > 0) {
+      if (STATE.metrics.autoRecord && !recorder.recording && !recorder.startedAt) {
+        // Armed by ?record=1: begin at the first detected pose rather than on
+        // load, so a tripod setup does not bank seconds of an empty gym.
+        controls.toggle();
+      }
+      recorder.capture(detected.worldLandmarks[0], timestamp);
+    }
+    lastResult = smooth(detected, timestamp);
+    recordSample(lastResult, timestamp);
   }
 
   renderer.draw(camera.video, lastResult);
+  drawMetrics();
+}
+
+/**
+ * Metrics run off the smoothed world landmarks, so they inherit the same
+ * filtering the overlay shows. Losing the pose clears the history rather than
+ * letting a stale window blend across a gap.
+ */
+function recordSample(result, timestamp) {
+  if (!STATE.metrics.enabled) {
+    return;
+  }
+  if (result.worldLandmarks.length === 0) {
+    frames.clear();
+    return;
+  }
+  frames.push(buildSample(result.worldLandmarks[0], timestamp));
+}
+
+function drawMetrics() {
+  if (!STATE.metrics.enabled) {
+    return;
+  }
+  const samples = frames.window(STATE.metrics.windowMs);
+  let note;
+  if (recorder.recording) {
+    const mb = (recorder.estimateBytes() / 1048576).toFixed(1);
+    note = `● REC ${recorder.durationSeconds.toFixed(0)}s · ${recorder.frames.length} frames · ${recorder.marks.length} marks · ~${mb}MB`;
+  } else if (samples.length === 0) {
+    note = "no pose — stand in frame";
+  } else {
+    note = `${(STATE.metrics.windowMs / 1000).toFixed(0)}s window · ${samples.length} frames · R to record`;
+  }
+  readout.draw(STATE.metrics.view, evaluate(STATE.metrics.view, samples), note);
+  if (recorder.recording) {
+    controls.render();
+  }
 }
 
 function renderPrediction() {
   renderResult();
   rafId = requestAnimationFrame(renderPrediction);
+}
+
+function captureMeta() {
+  return {
+    view: STATE.metrics.view,
+    model: STATE.model,
+    smoothing: STATE.smoothing,
+    camera: { width: camera.video.width, height: camera.video.height },
+  };
+}
+
+function saveSession() {
+  const filename = downloadSession(recorder, POSE_LANDMARK_NAMES);
+  controls.reportSaved(
+    filename.name,
+    filename.bytes,
+    recorder.frames.length,
+    recorder.marks.length,
+    recorder.fps
+  );
 }
 
 function applyUrlParams() {
@@ -86,6 +159,17 @@ function applyUrlParams() {
   }
   if (urlParams.has("smoothing")) {
     STATE.smoothing.enabled = urlParams.get("smoothing") !== "0";
+  }
+
+  const view = urlParams.get("view");
+  if (view != null && VIEWS.includes(view)) {
+    STATE.metrics.view = view;
+  }
+  if (urlParams.has("metrics")) {
+    STATE.metrics.enabled = urlParams.get("metrics") !== "0";
+  }
+  if (urlParams.has("record")) {
+    STATE.metrics.autoRecord = urlParams.get("record") !== "0";
   }
 }
 
@@ -102,6 +186,13 @@ async function app() {
   canvas.width = camera.video.width;
   canvas.height = camera.video.height;
   renderer = new RendererCanvas2d(canvas);
+  readout = new Readout(canvas);
+  frames = new FrameBuffer(STATE.metrics.bufferFrames);
+  recorder = new SessionRecorder();
+  controls = new RecorderControls(recorder, {
+    onStart: captureMeta,
+    onStop: saveSession,
+  });
 
   renderPrediction();
 }
