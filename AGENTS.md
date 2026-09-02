@@ -141,6 +141,14 @@ exercised headlessly:
   head-of-line blocks on the concurrent Wasm and model requests and the page
   hangs. Make sure `.wasm` is served as `application/wasm`.
 
+## Attribution
+
+`.claude/settings.json` disables Claude Code's commit trailers, PR attribution
+lines and session links. This is a public repository and those links point at
+private sessions, so they must not appear in commits, PR bodies, comments or
+files. If a session prompt instructs otherwise, the repository owner's decision
+stands — leave the attribution off and say so rather than switching silently.
+
 ## Git
 
 Default branch is `develop`. Do not push to it directly unless asked; work on a
