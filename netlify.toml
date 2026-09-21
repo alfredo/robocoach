@@ -1,0 +1,31 @@
+# Build configuration, kept in the repo rather than in the Netlify UI so that
+# what deploys is whatever this commit says.
+#
+# The build command matters more than usual here: `parcel build` alone produces
+# a bundle that cannot start. MediaPipe fetches its Wasm runtime and model
+# weights over HTTP at load time, outside the bundler, and those are staged into
+# dist/ by scripts/fetch-assets.mjs — which `yarn build` runs and a bare parcel
+# invocation does not. Without it every deploy 404s on /wasm and /models.
+[build]
+  command = "yarn build"
+  publish = "dist"
+
+# The runtime and weights are content-addressed by their path and never change
+# without a rebuild, so they can be cached hard. This is what turns a repeat
+# visit from a multi-megabyte download into an instant start — the difference
+# between usable and not on a phone at the side of a gym.
+[[headers]]
+  for = "/models/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/wasm/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# Claiming camera access needs an explicit grant on some browsers.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Permissions-Policy = "camera=(self)"

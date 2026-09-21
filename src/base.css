@@ -1,5 +1,9 @@
 body {
   margin: 0;
+  /* Dark, so the area before the video appears reads as deliberate rather than
+     as a blank failed page. */
+  background: #111;
+  color: #f0f0f0;
 }
 #stats {
   position: relative;
@@ -72,4 +76,65 @@ body {
 /* Keep the video clear of the fixed bar. */
 #main {
   padding-bottom: 84px;
+}
+
+/* Startup state.
+   The app cannot draw anything until the camera is live AND the pose model has
+   downloaded — several seconds on a phone, and the model alone is megabytes.
+   Without this the screen is simply blank, and a failure looks exactly like a
+   slow load. */
+#startup {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+  font: 15px system-ui, sans-serif;
+  background: #111;
+  z-index: 10;
+}
+#startup[hidden] {
+  display: none;
+}
+#startup-message {
+  margin: 0;
+  font-weight: 600;
+}
+#startup-detail {
+  margin: 0;
+  color: #a0a0a0;
+  font-size: 13px;
+  max-width: 34em;
+  line-height: 1.5;
+}
+#startup-track {
+  width: min(280px, 70vw);
+  height: 6px;
+  border-radius: 3px;
+  background: #333;
+  overflow: hidden;
+}
+#startup-track[hidden] {
+  display: none;
+}
+#startup-bar {
+  width: 0%;
+  height: 100%;
+  background: #4a9eff;
+  transition: width 0.15s linear;
+}
+#startup.failed #startup-message {
+  color: #ff8a80;
+}
+/* .control carries a white label but no background of its own, so without this
+   the retry button is white-on-default-grey. */
+#startup-retry {
+  background: #37474f;
+}
+#startup-retry[hidden] {
+  display: none;
 }

@@ -15,6 +15,17 @@
     <script src="index.js" type="module"></script>
   </head>
   <body>
+    <!-- Visible in the static markup, so a stalled or failed bundle still shows
+         something rather than a blank page. JS takes it over from there. -->
+    <div id="startup" role="status" aria-live="polite">
+      <p id="startup-message">Loading&hellip;</p>
+      <div id="startup-track"><div id="startup-bar"></div></div>
+      <p id="startup-detail"></p>
+      <button id="startup-retry" type="button" class="control" hidden>
+        Try again
+      </button>
+    </div>
+
     <div id="main">
       <div class="container">
         <div class="canvas-wrapper">
