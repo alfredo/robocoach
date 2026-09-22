@@ -68,6 +68,12 @@ MediaPipe fetches two things over HTTP at load time, outside the bundler:
 - `WASM_PATH` and `MODEL_ASSETS` in `params.js` are origin-relative. Changing
   them to CDN URLs reintroduces a third-party runtime dependency and breaks
   offline use.
+- **First load is 17-21MB**: the Wasm runtime is ~11MB, larger than the model
+  (5.5MB lite, 9MB full). On a phone that is a minute or more, so both
+  downloads report progress and `netlify.toml` caches them as immutable, which
+  is what makes a repeat visit start immediately. Mobile defaults to `lite`.
+- `netlify.toml` pins the build command for the same reason. A deploy built
+  with a bare `parcel build` produces a bundle that cannot start.
 
 ## Conventions
 

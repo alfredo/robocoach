@@ -1,6 +1,6 @@
 import { FilesetResolver, PoseLandmarker } from "@mediapipe/tasks-vision";
 
-import { Camera } from "./camera";
+import { Camera, isMobile } from "./camera";
 import { LandmarkSmoother } from "./one_euro_filter";
 import { RendererCanvas2d } from "./renderer_canvas2d";
 import { MODEL_ASSETS, POSE_LANDMARK_NAMES, STATE, WASM_PATH } from "./params";
@@ -10,29 +10,71 @@ import { evaluate, VIEWS } from "./metrics/definitions";
 import { Readout } from "./metrics/readout";
 import { SessionRecorder, downloadSession } from "./metrics/recorder";
 import { RecorderControls } from "./metrics/controls";
+import {
+  Startup,
+  fetchWithProgress,
+  formatMB,
+  trackFetchProgress,
+} from "./startup";
 
 let camera, landmarker, renderer, rafId;
 let normalizedSmoother, worldSmoother;
-let frames, readout, recorder, controls;
+let frames, readout, recorder, controls, startup;
 // detectForVideo requires strictly increasing timestamps, and re-running
 // inference on a frame the camera has not replaced yet is wasted work.
 let lastVideoTime = -1;
 let lastResult = null;
 
 async function createLandmarker() {
+  // Resolving the fileset only computes paths; the ~11MB runtime binary is
+  // fetched later, inside createFromOptions.
   const vision = await FilesetResolver.forVisionTasks(WASM_PATH);
-  return PoseLandmarker.createFromOptions(vision, {
-    baseOptions: {
-      modelAssetPath: MODEL_ASSETS[STATE.model],
-      // GPU keeps a heavier model real-time; MediaPipe falls back to CPU on
-      // its own if the delegate is unavailable.
-      delegate: "GPU",
-    },
-    // VIDEO mode carries tracking state between frames, which both steadies
-    // the landmarks and avoids re-running whole-frame detection every time.
-    runningMode: "VIDEO",
-    ...STATE.landmarker,
+
+  // Fetched here rather than handed to MediaPipe as a path, so the download —
+  // by far the longest part of startup, and megabytes on a phone — can report
+  // real progress instead of an opaque wait.
+  startup.stage(
+    "Loading pose model\u2026",
+    `${STATE.model} model, cached after the first visit`
+  );
+  const modelBytes = await fetchWithProgress(
+    MODEL_ASSETS[STATE.model],
+    (fraction, received, total) => {
+      startup.progress(
+        fraction,
+        total
+          ? `${formatMB(received)} of ${formatMB(total)}`
+          : `${formatMB(received)} downloaded`
+      );
+    }
+  );
+
+  // The runtime download happens inside createFromOptions, so its progress has
+  // to be observed rather than driven.
+  startup.stage("Loading pose runtime\u2026", "about 11MB, cached after the first visit");
+  const untrack = trackFetchProgress("vision_wasm", (fraction, received, total) => {
+    startup.progress(
+      fraction,
+      total ? `${formatMB(received)} of ${formatMB(total)}` : `${formatMB(received)} downloaded`
+    );
   });
+
+  try {
+    return await PoseLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetBuffer: modelBytes,
+        // GPU keeps a heavier model real-time; MediaPipe falls back to CPU on
+        // its own if the delegate is unavailable.
+        delegate: "GPU",
+      },
+      // VIDEO mode carries tracking state between frames, which both steadies
+      // the landmarks and avoids re-running whole-frame detection every time.
+      runningMode: "VIDEO",
+      ...STATE.landmarker,
+    });
+  } finally {
+    untrack();
+  }
 }
 
 /**
@@ -150,6 +192,13 @@ function saveSession() {
 function applyUrlParams() {
   const urlParams = new URLSearchParams(window.location.search);
 
+  // A phone pays for the bigger model twice: once downloading it over mobile
+  // data, then again on every frame. Default to `lite` there; ?model= below
+  // still wins for anyone who wants the accuracy.
+  if (isMobile()) {
+    STATE.model = "lite";
+  }
+
   const model = urlParams.get("model");
   if (model != null && model in MODEL_ASSETS) {
     STATE.model = model;
@@ -174,8 +223,20 @@ function applyUrlParams() {
 }
 
 async function app() {
+  startup = new Startup();
+  startup.onRetry(() => window.location.reload());
+
+  try {
+    await start();
+  } catch (error) {
+    startup.fail(error);
+  }
+}
+
+async function start() {
   applyUrlParams();
 
+  startup.stage("Starting camera\u2026", "Allow camera access when prompted.");
   camera = await Camera.setup(STATE.camera);
   landmarker = await createLandmarker();
 
@@ -194,6 +255,7 @@ async function app() {
     onStop: saveSession,
   });
 
+  startup.done();
   renderPrediction();
 }
 
